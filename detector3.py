@@ -1,5 +1,17 @@
 VERSION = "1.1.0"
 
+# DPI 인식 모드를 고정해 pyautogui ↔ mss 좌표 일관성 유지
+# (pywin32 import 전에 설정해야 함)
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)  # System DPI Aware
+except Exception:
+    try:
+        import ctypes
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
@@ -918,8 +930,9 @@ class CheDetect:
                                     self.status_var.set(f"▶ [{i+1}] {r['name']} - 반복 중 ({c}/{t})"))
             elif rtype == "click":
                 rx, ry = record["click_x"], record["click_y"]
-                ax = rx + (self.region[0] if self.region else 0)
-                ay = ry + (self.region[1] if self.region else 0)
+                scale = _get_dpi_scale()
+                ax = int((rx + (self.region[0] if self.region else 0)) * scale)
+                ay = int((ry + (self.region[1] if self.region else 0)) * scale)
                 pyautogui.click(ax, ay)
                 self.root.after(0, lambda r=record, i=current_idx, ax=ax, ay=ay:
                                 self.status_var.set(f"▶ [{i+1}] {r['name']} - 클릭 ({ax},{ay})"))
@@ -929,7 +942,8 @@ class CheDetect:
                 wait_type = record.get("wait_type", "none")
                 if pos:
                     cx, cy = pos[0], pos[1]
-                    pyautogui.moveTo(cx, cy)
+                    scale = _get_dpi_scale()
+                    pyautogui.moveTo(int(cx * scale), int(cy * scale))
                     time.sleep(0.05)
                     pyautogui.click()
                     self.root.after(0, lambda r=record, i=current_idx, cx=cx, cy=cy:
@@ -960,7 +974,8 @@ class CheDetect:
                     if found:
                         cx = (found[0] + found[2]) // 2
                         cy = (found[1] + found[3]) // 2
-                        pyautogui.moveTo(cx, cy)
+                        scale = _get_dpi_scale()
+                        pyautogui.moveTo(int(cx * scale), int(cy * scale))
                         time.sleep(0.05)
                         pyautogui.click()
                         self.root.after(0, lambda r=record, i=current_idx, cx=cx, cy=cy:
@@ -1806,8 +1821,26 @@ class ClickRecordDialog:
 
 
 # ────────── 실행 ──────────
+def _check_admin():
+    """관리자 권한 확인. 없으면 경고 팝업."""
+    try:
+        import ctypes
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            import tkinter.messagebox as mb
+            mb.showwarning(
+                "관리자 권한 필요",
+                "관리자 권한 없이 실행 중입니다.\n\n"
+                "글로벌 단축키(F6/F3)와 게임 창 클릭이 정상 동작하지 않을 수 있습니다.\n"
+                "프로그램을 우클릭 → '관리자 권한으로 실행' 을 권장합니다."
+            )
+    except Exception:
+        pass
+
 if __name__ == "__main__":
     root = tk.Tk()
+    root.withdraw()
+    _check_admin()
+    root.deiconify()
     app = CheDetect(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
