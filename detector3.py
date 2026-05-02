@@ -1,4 +1,4 @@
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 
 # DPI 인식 모드를 고정해 pyautogui ↔ mss 좌표 일관성 유지
 # (pywin32 import 전에 설정해야 함)
@@ -630,17 +630,21 @@ class CheDetect:
             messagebox.showerror("오류", f"창 목록을 가져오지 못했습니다:\n{e}")
             return
 
-        # 게임 키워드로 자동 매칭
-        auto_match = next(
-            ((hwnd, title) for hwnd, title in windows
-             if any(k.lower() in title.lower() for k in GAME_KEYWORDS)),
-            None
-        )
+        # 게임 키워드로 매칭되는 창 전체 수집
+        matched = [
+            (hwnd, title) for hwnd, title in windows
+            if any(k.lower() in title.lower() for k in GAME_KEYWORDS)
+        ]
 
-        if auto_match:
-            hwnd, title = auto_match
-            self._apply_window_region(hwnd, title)
+        if len(matched) == 1:
+            # 하나만 있으면 바로 적용
+            self._apply_window_region(matched[0][0], matched[0][1])
+        elif len(matched) >= 2:
+            # 두 개 이상이면 "게임창1 / 게임창2" 선택 팝업
+            labeled = [(hwnd, f"게임창{i+1}  [{title}]") for i, (hwnd, title) in enumerate(matched)]
+            WindowPickerDialog(self.root, labeled, self._apply_window_region)
         else:
+            # 자동 감지 실패 → 전체 창 목록 표시
             if not windows:
                 messagebox.showwarning("창 없음", "표시된 창을 찾을 수 없습니다.")
                 return
