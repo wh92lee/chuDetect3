@@ -1,16 +1,13 @@
-VERSION = "1.1.0"
+VERSION = "1.1.2"
 
 # DPI 인식 모드를 고정해 pyautogui ↔ mss 좌표 일관성 유지
 # (pywin32 import 전에 설정해야 함)
 try:
     import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)  # System DPI Aware
+    # DPI 비인식 모드 — mss/pyautogui/win32gui 좌표계 통일
+    ctypes.windll.shcore.SetProcessDpiAwareness(0)
 except Exception:
-    try:
-        import ctypes
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    pass
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -1012,7 +1009,9 @@ class CheDetect:
         return region
 
     def _find_image(self, record):
-        """이미지를 화면에서 찾아 (x1,y1,x2,y2, max_val) 반환, 없으면 (None, max_val)"""
+        """그레이스케일 + 다중 스케일 템플릿 매칭.
+        반환: ((x1,y1,x2,y2), max_val) 또는 (None, max_val)
+        """
         if not record.get("image_path"):
             return None, 0.0
         if not os.path.exists(record["image_path"]):
@@ -1020,27 +1019,48 @@ class CheDetect:
         try:
             x1, y1, x2, y2 = self._resolve_region(record, "image_region")
             screenshot = _grab_region(x1, y1, x2, y2)
-            screen = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+            screen_bgr = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+            screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
 
-            template = cv2.imread(record["image_path"])
-            if template is None:
+            tmpl_bgr = cv2.imread(record["image_path"])
+            if tmpl_bgr is None:
                 return None, 0.0
+            tmpl_gray = cv2.cvtColor(tmpl_bgr, cv2.COLOR_BGR2GRAY)
 
-            th, tw = template.shape[:2]
-            sh, sw = screen.shape[:2]
-            if tw > sw or th > sh:
-                self.root.after(0, lambda tw=tw, th=th, sw=sw, sh=sh:
-                    self.status_var.set(
-                        f"⚠ 이미지 감지 오류: 템플릿({tw}x{th})이 감지 영역({sw}x{sh})보다 큽니다"))
-                return None, 0.0
+            th, tw = tmpl_gray.shape[:2]
+            sh, sw = screen_gray.shape[:2]
+            confidence = record.get("confidence", DEFAULT_CONFIDENCE)
 
-            result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            best_val = 0.0
+            best_loc = None
+            best_tw, best_th = tw, th
 
-            if max_val >= record["confidence"]:
-                mx, my = max_loc
-                return (x1 + mx, y1 + my, x1 + mx + tw, y1 + my + th), max_val
-            return None, max_val
+            # 1.0 먼저, 이후 ±5%~±20% 순으로 시도 (윈도우 크기 변화 대응)
+            scales = [1.0, 0.95, 1.05, 0.9, 1.1, 0.85, 1.15, 0.8, 1.2]
+            for scale in scales:
+                nw = max(4, int(tw * scale))
+                nh = max(4, int(th * scale))
+                if nw > sw or nh > sh:
+                    continue
+
+                t = tmpl_gray if scale == 1.0 else cv2.resize(
+                    tmpl_gray, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+                res = cv2.matchTemplate(screen_gray, t, cv2.TM_CCOEFF_NORMED)
+                _, mv, _, ml = cv2.minMaxLoc(res)
+
+                if mv > best_val:
+                    best_val = mv
+                    best_loc = ml
+                    best_tw, best_th = nw, nh
+
+                if best_val >= confidence:
+                    break  # 충분한 유사도 → 더 탐색 불필요
+
+            if best_val >= confidence and best_loc is not None:
+                mx, my = best_loc
+                return (x1 + mx, y1 + my, x1 + mx + best_tw, y1 + my + best_th), best_val
+            return None, best_val
         except Exception as e:
             err = str(e)
             self.root.after(0, lambda err=err: self.status_var.set(f"⚠ 이미지 감지 오류: {err}"))
