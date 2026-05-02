@@ -1,4 +1,4 @@
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 # DPI 인식 모드를 고정해 pyautogui ↔ mss 좌표 일관성 유지
 # (pywin32 import 전에 설정해야 함)
@@ -489,6 +489,7 @@ class CheDetect:
 
         self.records = []   # {"type": "image"|"click", ...}
         self.region = None  # (x1, y1, x2, y2)
+        self.game_hwnd = None  # 게임 창 hwnd — 매 스캔마다 창 위치 재조회에 사용
         self.running = False
         self.macro_thread = None
         self.start_key = DEFAULT_START_KEY
@@ -665,6 +666,7 @@ class CheDetect:
             messagebox.showwarning("경고", f"'{title}' 창의 크기가 올바르지 않습니다.\n최소화 상태인지 확인하세요.")
             return
 
+        self.game_hwnd = hwnd   # 창 위치 자동 추적용
         self._on_region_selected(region)
         self.region_var.set(f"[{title}]  {w}×{h}")
 
@@ -955,6 +957,22 @@ class CheDetect:
             self.tree.item(item, tags=())
 
     # ── 매크로 실행 ──
+    def _refresh_game_window_region(self):
+        """game_hwnd가 있으면 창의 현재 위치로 self.region을 갱신."""
+        if not self.game_hwnd:
+            return
+        try:
+            import win32gui
+            if not win32gui.IsWindow(self.game_hwnd):
+                return
+            region = _get_window_client_region(self.game_hwnd)
+            w = region[2] - region[0]
+            h = region[3] - region[1]
+            if w > 0 and h > 0:
+                self.region = region
+        except Exception:
+            pass
+
     def _run_macro(self):
         current_idx = 0
         loop_counters = {}   # {record_idx: 현재 반복 횟수}
@@ -963,6 +981,9 @@ class CheDetect:
             if current_idx >= len(self.records) or current_idx < 0:
                 self._stop_from_thread()
                 break
+
+            # 게임 창 위치 자동 추적 (창이 이동해도 항상 정확한 좌표 유지)
+            self._refresh_game_window_region()
 
             record = self.records[current_idx]
             rtype = record.get("type", "image")
