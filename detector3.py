@@ -1,4 +1,4 @@
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 
 # DPI 인식 모드를 고정해 pyautogui ↔ mss 좌표 일관성 유지
 # (pywin32 import 전에 설정해야 함)
@@ -556,6 +556,8 @@ class CheDetect:
         tk.Button(frame_rec_btns, text="삭제", width=8, command=self._delete_record).pack(side="left", padx=2)
         tk.Button(frame_rec_btns, text="▲ 위로", width=8, command=self._move_up).pack(side="left", padx=2)
         tk.Button(frame_rec_btns, text="▼ 아래로", width=8, command=self._move_down).pack(side="left", padx=2)
+        tk.Button(frame_rec_btns, text="🔍 테스트", width=10, bg="#FF8C00", fg="white",
+                  command=self._test_selected_record).pack(side="left", padx=2)
 
         # ── 단축키 설정 ──
         frame_keys = tk.LabelFrame(frame_left, text="단축키 설정")
@@ -799,6 +801,65 @@ class CheDetect:
 
     def _on_double_click(self, event):
         self._edit_record()
+
+    # ── 단일 레코드 테스트 ──
+    def _test_selected_record(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("선택 없음", "테스트할 레코드를 선택하세요.")
+            return
+        idx = self.tree.index(selected[0])
+        record = self.records[idx]
+
+        if record.get("type") != "image" or not record.get("image_path"):
+            messagebox.showinfo("테스트 불가", "이미지 감지 레코드만 테스트 가능합니다.")
+            return
+        if not self.region:
+            messagebox.showwarning("경고", "감지 영역을 먼저 설정하세요.")
+            return
+        if not os.path.exists(record["image_path"]):
+            messagebox.showerror("오류", f"템플릿 이미지 파일이 없습니다:\n{record['image_path']}")
+            return
+
+        def _run():
+            found, max_val = self._find_image(record)
+            pct = int(max_val * 100)
+            conf_pct = int(record.get("confidence", DEFAULT_CONFIDENCE) * 100)
+
+            # 디버그 이미지 저장: 화면 캡처 + 매치 위치 표시
+            debug_path = ""
+            try:
+                x1, y1, x2, y2 = self._resolve_region(record, "image_region")
+                screen_pil = _grab_region(x1, y1, x2, y2)
+                screen_bgr = cv2.cvtColor(np.array(screen_pil), cv2.COLOR_RGB2BGR)
+
+                if found:
+                    fx1, fy1, fx2, fy2 = found
+                    # 절대→상대 좌표로 변환하여 사각형 표시
+                    rx1, ry1 = fx1 - x1, fy1 - y1
+                    rx2, ry2 = fx2 - x1, fy2 - y1
+                    cv2.rectangle(screen_bgr, (rx1, ry1), (rx2, ry2), (0, 255, 0), 2)
+                    cv2.putText(screen_bgr, f"FOUND {pct}%", (rx1, max(ry1 - 6, 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                else:
+                    cv2.putText(screen_bgr, f"NOT FOUND {pct}%", (10, 24),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+                debug_path = os.path.join(_captures_dir(),
+                                          f"debug_test_{int(time.time()*1000)}.png")
+                cv2.imwrite(debug_path, screen_bgr)
+            except Exception as e:
+                debug_path = f"(저장 실패: {e})"
+
+            result = "✅ 발견!" if found else "❌ 미발견"
+            msg = (f"{result}\n\n"
+                   f"유사도:  {pct}%\n"
+                   f"기준치:  {conf_pct}%\n\n"
+                   f"디버그 이미지:\n{debug_path}")
+            self.root.after(0, lambda: messagebox.showinfo(
+                f"테스트 결과 — {record['name']}", msg))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 단축키 ──
     def _register_hotkeys(self):
